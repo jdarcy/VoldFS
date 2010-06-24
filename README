@@ -2,7 +2,7 @@ You will need a working installation of python-fuse and Voldemort, both
 where Python can find and load them as "fuse" and "voldemort"
 respectively.  Alternatively, you can define the environment variable
 VOLDFS_DB to any other module that can be loaded and uses the same
-interface as Voldemort; see fake.py for an example of a simple example
+interface as Voldemort; see fake.py for a simple example that's useful
 for debugging and development.  To start, just do something like this:
 
 	./voldfs.py -s /tmp/myfs

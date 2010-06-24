@@ -21,7 +21,7 @@ import sys
 from vfs_base import *
 
 import jlog
-log = jlog.logger(jlog.DEBUG)
+log = jlog.logger(jlog.NORMAL)
 
 BUCKET_HDR_FMT = "!c3x"
 BUCKET_HDR_SZ = struct.calcsize(BUCKET_HDR_FMT)

@@ -17,7 +17,6 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 import stat
 import struct
 import sys
-#import voldemort
 
 import jlog
 log = jlog.logger(jlog.NORMAL)
@@ -263,6 +262,10 @@ class FS:
 				idata = self.expand_inode(key,idata)
 				old_depth += 1
 			log.it(jlog.DEBUG,"new depth = %d" % new_depth)
+			# Just to be "safe" we re-fetch these.
+			# TBD: expand_inode needs to be made collion-safe
+			idata, vector = self.get_inode(key)
+			inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
 		# Things below here might be making modifications directly
 		# to idata, without updating inode, so make sure nobody uses
 		# inode.
