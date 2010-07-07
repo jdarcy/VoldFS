@@ -17,6 +17,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 import stat
 import struct
 import sys
+import time
 
 import jlog
 log = jlog.logger(jlog.NORMAL)
@@ -81,6 +82,20 @@ class BlockSet:
 			putter(k,v)
 		# TBD: GC anything in old_blocks/free_list
 
+class IoOp:
+	def __init__ (self, op, key):
+		self.key = key
+		self.name = "%s,%s" % (op, repr(key))
+		self.version = None
+	def __repr__ (self):
+		if self.version:
+			return "IoOp(%s,%d)" % (self.name,
+				self.version.entries[0].version)
+		else:
+			return "IoOp(%s)" % self.name
+	def set_version (self, vec):
+		self.version = vec
+
 class FS:
 	def __init__ (self, store):
 		self.store = store
@@ -124,8 +139,11 @@ class FS:
 			offset = INODE_SZ + index * PTR_SZ
 			idata = idata[:offset] + pdata + idata[offset+PTR_SZ:]
 		return self.put_value(key,idata)
-	def get_data (self, key, offset, length):
+	def get_data (self, key, offset, length, io=None):
+		if not io:
+			io = IoOp("get",key)
 		idata, vector = self.get_inode(key)
+		io.set_version(vector)
 		inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
 		size = inode[6]
 		if offset >= size:
@@ -167,16 +185,39 @@ class FS:
 				# Fell into a hole.
 				return struct.pack('%ds'%length,'')
 		return data[offset:offset+length]
-	def expand_inode (self, key, idata):
-		new_key = get_new_key()
-		self.put_value(new_key,idata[INODE_SZ:])
-		old_inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
-		new_inode = old_inode[:10] + (old_inode[10]+1,)
-		new_idata = apply(struct.pack,(INODE_FMT,)+new_inode)
-		new_idata += new_key
-		new_idata += struct.pack('%ds'%(BLOCK_SZ-PTR_SZ),'')
-		self.put_value(key,new_idata)
-		return new_idata
+	def ensure_size (self, key, new_size):
+		while True:
+			idata, vector = self.get_inode(key)
+			inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
+			old_size = inode[6]
+			if new_size <= old_size:
+				return idata, vector
+			old_depth = inode[10]
+			new_depth = 0
+			blocks = (new_size + BLOCK_SZ - 1) / BLOCK_SZ
+			while blocks > 1:
+				new_depth += 1
+				blocks += (PTRS_PER_BLOCK - 1)
+				blocks /= PTRS_PER_BLOCK
+			if new_depth <= old_depth:
+				return idata, vector
+			log.it(jlog.DEBUG, "expanding from %d" % old_depth)
+			new_key = get_new_key()
+			self.put_value(new_key,idata[INODE_SZ:])
+			old_inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
+			new_inode = old_inode[:10] + (old_inode[10]+1,)
+			new_idata = apply(struct.pack,(INODE_FMT,)+new_inode)
+			new_idata += new_key
+			new_idata += struct.pack('%ds'%(BLOCK_SZ-PTR_SZ),'')
+			try:
+				self.put_value(key,new_idata,vector)
+				old_depth += 1
+				if old_depth >= new_depth:
+					log.it(jlog.DEBUG,
+						"new depth = %d" % new_depth)
+					return new_idata, vector
+			except:	# TBD: catch conflict-specific error(s)
+				pass	# TBD: delete new_key
 	def link_one (self, key, path, dkey, bset):
 		if len(path) == 0:
 			return dkey
@@ -209,7 +250,7 @@ class FS:
 		ckey = self.link_one(ckey,path,dkey,bset)
 		idata = idata[:offset] + ckey + idata[offset+PTR_SZ:]
 		return idata
-	def put_once (self, ikey, idata, data, chunks, bset):
+	def put_once (self, io, idata, data, chunks, bset):
 		# Make sure every block is in store, not necessarily linked.
 		index = 0
 		for mem_off, dsk_off, length, key in chunks:
@@ -219,7 +260,8 @@ class FS:
 				new_data = data[mem_off:(mem_off+length)]
 			else:
 				tmp_off = (dsk_off / BLOCK_SZ) * BLOCK_SZ
-				old_data = self.get_data(ikey,tmp_off,BLOCK_SZ)
+				old_data = self.get_data(io.key,tmp_off,
+					BLOCK_SZ, io)
 				short = BLOCK_SZ - len(old_data)
 				if short:
 					extra = struct.pack('%ds'%short,'')
@@ -244,49 +286,30 @@ class FS:
 			idata[INODE_SZ:]
 		return idata
 	def put_data (self, key, offset, data):
-		idata, vector = self.get_inode(key)
-		inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
-		old_depth = inode[10]
-		old_size = inode[6]
+		io = IoOp("put",key)
 		new_size = offset + len(data)
-		if new_size > old_size:
-			new_depth = 0
-			blocks = (new_size + BLOCK_SZ - 1) / BLOCK_SZ
-			while blocks > 1:
-				new_depth += 1
-				blocks += (PTRS_PER_BLOCK - 1)
-				blocks /= PTRS_PER_BLOCK
-			while new_depth > old_depth:
-				log.it(jlog.DEBUG,
-					"expanding from %d" % old_depth)
-				idata = self.expand_inode(key,idata)
-				old_depth += 1
-			log.it(jlog.DEBUG,"new depth = %d" % new_depth)
-			# Just to be "safe" we re-fetch these.
-			# TBD: expand_inode needs to be made collion-safe
-			idata, vector = self.get_inode(key)
-			inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
-		# Things below here might be making modifications directly
-		# to idata, without updating inode, so make sure nobody uses
-		# inode.
-		del inode
-		if (old_depth == 0) and (new_size <= BLOCK_SZ):
+		idata, vector = self.ensure_size(key,new_size)
+		io.set_version(vector)
+		inode = struct.unpack(INODE_FMT,idata[:INODE_SZ])
+		old_size = inode[6]
+		depth = inode[10]
+		# Try the easy path if we can.
+		while (depth == 0) and (new_size <= BLOCK_SZ):
 			log.it(jlog.DEBUG,"taking short path")
 			b_offset = INODE_SZ + offset
 			e_offset = INODE_SZ + new_size
-			while True:
-				try:
-					if new_size > old_size:
-						idata = self.fix_size(
-							idata, new_size)
-					idata = idata[:b_offset] + \
-						data + idata[e_offset:]
-					self.put_value(key,idata,vector)
-					return len(data)
-				except:	# TBD: catch conflict-specific error(s)
-					print sys.exc_info()
-					idata, vector = self.get_inode(key)
-					raise
+			try:
+				if new_size > old_size:
+					idata = self.fix_size(idata, new_size)
+				idata = idata[:b_offset] + \
+					data + idata[e_offset:]
+				self.put_value(key,idata,vector)
+				return len(data)
+			except:	# TBD: catch conflict-specific error(s)
+				idata, vector = self.get_inode(key)
+		# We don't want anyone manipulating inode below here.
+		del inode
+		# Make a list of block-level operations.
 		chunks = []
 		mem_offset = 0
 		dsk_offset = offset
@@ -302,20 +325,26 @@ class FS:
 			dsk_offset += this_len
 			total_len -= this_len
 		bset = BlockSet(self.get_value)
+		# Try to apply the list until we succeed.
 		while True:
 			try:
-				idata = self.put_once(key,idata,data,
+				idata = self.put_once(io,idata,data,
 							chunks,bset)
 				bset.flush(self.put_value)
 				if new_size > old_size:
 					idata = self.fix_size(idata,new_size)
-				self.put_value(key,idata,vector)
+				print "sleeping..."
+				time.sleep(10)
+				print "awake"
+				self.put_value(key,idata,io.version)
 				break
 			except:	# TBD: catch conflict-specific error(s)
-				print sys.exc_info()
 				bset.reset()
-				idata = self.get_inode(key)
-				raise
+				idata, vector = self.get_inode(key)
+				new_old_size = struct.unpack(INODE_FMT,
+					idata[:INODE_SZ])[6]
+				if new_old_size != old_size:
+					old_size = new_old_size
 		return len(data)
 	def dump_pointers (self, data, offset, cur_depth, max_depth):
 		if cur_depth >= max_depth:

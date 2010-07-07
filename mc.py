@@ -51,8 +51,8 @@ def decode (istr):
 # prune the stored-version list nor update its contents after a successful
 # operation.  The first means that the list tends to grow without bound.
 # The second means that the list can contain stale information, so e.g. if
-# we do put once from within expand_inode and try to put again to update a
-# bucket other than index zero, the second put will fail.
+# we put once from within expand_inode and try to put again to update an
+# indirect block, the second put will fail.
 #
 # We could deal with the stale-version problem by updating the version list
 # (self.mc.cas_ids) in place, but then we'd still have the unchecked-growth
@@ -74,10 +74,10 @@ class StoreClient:
 	def get (self, key):
 		k2 = encode(key)
 		data = self.mc.gets(k2)
-		self.log(("get",k2,len(data)))
 		if not data:
 			print "get(%s) FAILED" % k2
-			return []
+			raise RuntimeError, "bad get"
+		self.log(("get",k2,len(data)))
 		version = self.mc.cas_ids[k2]
 		del self.mc.cas_ids[k2]
 		return [(data,FakeVector(version))]
