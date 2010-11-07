@@ -9,3 +9,12 @@ for debugging and development.  To start, just do something like this:
 
 Yes, the -s is necessary, because something "down below" isn't thread-safe.
 For more updates, search for "VoldFS" on my site - http://pl.atyp.us
+
+TO DO:
+	real attributes etc.
+	general cleanup ("TBD" throughout the code)
+	"update single allocated block" optimization
+	conditional update in S3 back end
+	caching S3 back end (local ops to FS + async write to S3)
+
+

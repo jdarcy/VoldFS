@@ -36,15 +36,6 @@ def encode (istr):
 		ostr += '%02x' % ord(c)
 	return ostr
 
-def decode (istr):
-	ostr = ""
-	ilen = len(istr)
-	i = 0
-	while i < ilen:
-		ostr += chr(int(istr[i:i+2],16))
-		i += 2
-	return ostr
-
 # The memcached client stores CAS versions itself instead of passing them
 # back to us (like Voldemort does).  Yes, "CAS" is a misnomer for what's
 # really a conditional write.  Anyway, what's worse is that they neither

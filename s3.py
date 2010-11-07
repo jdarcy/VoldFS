@@ -14,6 +14,9 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 """
 
+import boto
+import os
+
 class FakeVersion:
 	def __init__ (self):
 		self.version = 0
@@ -23,12 +26,25 @@ class FakeVector:
 		self.value = v
 		self.entries = [FakeVersion()]
 
+# Memcached keys are not binary-safe, so we convert to a strict text form.
+def encode (istr):
+	ostr = ""
+	for c in istr:
+		ostr += '%02x' % ord(c)
+	return ostr
+
 class StoreClient:
 	def __init__ (self, store_name, bootstrap_urls):
-		self.auto_mkfs = True
-		self.data = {}
+		self.auto_mkfs = False
+		self.key = os.getenv("VOLDFS_KEY")
+		self.secret = os.getenv("VOLDFS_SECRET")
+		self.bucket = os.getenv("VOLDFS_BUCKET")
+		self.conn = boto.connect_s3(self.key,self.secret)
+		self.bucket = self.conn.get_bucket(self.bucket)
 	def get (self, key):
-		return self.data[key]
+		a_key = self.bucket.new_key(encode(key))
+		data = a_key.get_contents_as_string()
+		return [[data,FakeVector(0)]]
 	def put (self, key, data, version):
-		self.data[key] = [[data,FakeVector(version)]]
-		return True
+		a_key = self.bucket.new_key(encode(key))
+		a_key.set_contents_from_string(data)

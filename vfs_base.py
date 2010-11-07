@@ -333,9 +333,6 @@ class FS:
 				bset.flush(self.put_value)
 				if new_size > old_size:
 					idata = self.fix_size(idata,new_size)
-				print "sleeping..."
-				time.sleep(10)
-				print "awake"
 				self.put_value(key,idata,io.version)
 				break
 			except:	# TBD: catch conflict-specific error(s)
